@@ -28,12 +28,6 @@ def get_grad(img,ksize):
     Gx = cv2.Sobel(img,cv2.CV_32F,1,0,ksize)
     Gy = cv2.Sobel(img,cv2.CV_32F,0,1,ksize)
     return np.sqrt(Gx*Gx+Gy*Gy)
-    
-def noice_cancel(img,k_thr,ksize):
-    mx = np.amax(img)
-    r,nc = cv2.threshold(img, mx * k_thr, 1.0, cv2.THRESH_TOZERO)
-    #Смягчение границ
-    return cv2.GaussianBlur(nc,(ksize,ksize),0)
 
 class flash_auto():
     def __init__(self, vthr, cthr, istate, alpha):
@@ -61,7 +55,7 @@ class flash_auto():
         
 
 class BgEstimator():
-    def __init__(self, shape, k_alf = 0.1, alpha = 0.1):
+    def __init__(self, shape, k_alf = 0.1, alpha = 0.1, ksz = 41):
 
         if len(shape) != 2:
             print 'BgEstimator: shape must have form (x,y) !'
@@ -73,9 +67,9 @@ class BgEstimator():
         #Отработка вспышек
         self.flash = flash_auto(10.0, 0.000001, True,  alpha) #TODO:Подобрать эмпирически, или написать самонасройку
         #Отработка опорных кадров
-        self.ifrm  = flash_auto(1.2, 0.4,      False, alpha)  #TODO:Подобрать эмпирически, или написать самонасройку
+        self.ifrm  = flash_auto(1.9, 0.4,      False, alpha)  #TODO:Подобрать эмпирически, или написать самонасройку
         #Фильтруем выход
-        self.ng_ksz = 41
+        self.ng_ksz = ksz
         self.k_nr   = 1.0
         #Служебные данные
         self.nsden_z = 0
@@ -104,15 +98,18 @@ class BgEstimator():
     
     def _compute_blured(self, img, ksz):
         kshape = (ksz, ksz)
-        #
+    
+        #Фильтруем кадр и фон
         i   = cv2.GaussianBlur(img, kshape, 0)
-        avi = cv2.GaussianBlur(self.avg_frame, kshape, 0)
-        #
+        avi = cv2.GaussianBlur(self.avg_frame, kshape, 0) 
+
+        #Вычисляем разницу       
         d   = cv2.absdiff(i, avi)
-        #
+        
+        #Извлекаем маску по порогу
         thr = np.average(self.avg_noise) * self.k_nr
         n   = cv2.compare(d, thr, cv2.CMP_GT)
-        #
+        
         return n,d
         
 
@@ -147,10 +144,10 @@ class BgEstimator():
 
 
 class MotionSensor(BgEstimator):
-    def __init__(self, shape, k_alf = 0.1, alpha = 0.1, bl_ksz = 7):
+    def __init__(self, shape, k_alf = 0.1, alpha = 0.1, bl_ksz = 12):
 
         #
-        BgEstimator.__init__(self, shape, k_alf, alpha)
+        BgEstimator.__init__(self, shape, k_alf, alpha, 4 * bl_ksz + 1)
 
         # Ядро для морфологических операций
         self.krn = np.ones((bl_ksz, bl_ksz), np.float32)
@@ -171,7 +168,7 @@ class MotionSensor(BgEstimator):
 
         # Формируем "правильные окна" для объектов
         msk = cv2.dilate(msk, self.krn, iterations = 2)
-        msk = cv2.morphologyEx(msk, cv2.MORPH_CLOSE, self.krn*2)
+        msk = cv2.morphologyEx(msk, cv2.MORPH_CLOSE, self.krn)
         
         # Разметка областей
         msk = skim.label(msk.astype('int'), neighbors = 8)

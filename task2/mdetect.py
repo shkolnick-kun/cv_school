@@ -3,27 +3,23 @@
 """**************************************************************************
     Motion sensor
     Copyright (C) 2017 Paul Beltyukov
-
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation, either version 3 of the License, or
     (at your option) any later version.
-
     This program is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
     GNU General Public License for more details.
-
     You should have received a copy of the GNU General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
     Please contact with me by E-mail: beltyukov.p.a@gmail.com
 **************************************************************************"""
 import sys
 import os
 import cv2
 import numpy as np
-#В OpenCV 2.4.3 в Linux Mint 18 нет функций для разметки связянных областей
+#В OpenCV 2.4 нет функций для разметки связянных областей
 from skimage import measure as skim
 #==============================================================================
 #                             Motion detector!
@@ -39,6 +35,31 @@ def noice_cancel(img,k_thr,ksize):
     #Смягчение границ
     return cv2.GaussianBlur(nc,(ksize,ksize),0)
 
+class flash_auto():
+    def __init__(self, vthr, cthr, istate, alpha):
+        self.val_z = 0
+        self.vthr  = vthr
+        self.cnt   = 1.0
+        self.cthr  = cthr
+        self.state = istate
+        self.alpha = alpha
+   
+    def run(self, val):
+        if self.val_z > 0 and self.val_z * self.vthr < val:
+            self.state  = True
+            self.cnt    = 1.0
+        
+        if self.state:
+            if self.cnt > self.cthr:
+                self.cnt = self.cnt * (1.0 - self.alpha)
+            else:
+                self.state = False
+        
+        self.val_z = val
+
+        return self.state
+        
+
 class BgEstimator():
     def __init__(self, shape, k_alf = 0.1, alpha = 0.1):
 
@@ -50,15 +71,14 @@ class BgEstimator():
         self.k_alf = k_alf
         self.alpha = alpha
         #Отработка вспышек
-        self.noise_msk  = np.zeros(shape, 'uint8')
-        self.area_z = 0
-        self.ar_thr = 100.0 #TODO:Подобрать эмпирически, или написать самонасройку
-        self.flash  = True  #При старте происходит вспышка
-        self.cnt    = 1.0
-        self.cthr   = 0.0000015 #TODO:Подобрать эмпирически, или написать самонасройку
+        self.flash = flash_auto(10.0, 0.000001, True,  alpha) #TODO:Подобрать эмпирически, или написать самонасройку
+        #Отработка опорных кадров
+        self.ifrm  = flash_auto(1.2, 0.4,      False, alpha)  #TODO:Подобрать эмпирически, или написать самонасройку
         #Фильтруем выход
         self.ng_ksz = 41
         self.k_nr   = 1.0
+        #Служебные данные
+        self.nsden_z = 0
 
     def _run(self, img):
         fast = self.alpha
@@ -106,31 +126,24 @@ class BgEstimator():
         # достаточно вызвать self._compute_blured 
         # с несколькими размерами ядра и
         # объединить n, например, - "по или"
-        n,d = self._compute_blured(img, self.ng_ksz)
+        neg,d = self._compute_blured(img, self.ng_ksz)
 
         # Т.к. шумы оцениваются "не совсем сверху",
-        # считаем площадь "шумовых" областей движения. 
-        neg_noise = cv2.bitwise_and(neg_msk, self.noise_msk)
-        neg_noise = cv2.bitwise_and(neg_noise, 1)
-        area = np.sum(neg_noise)
-        
-        #Вспышка - резкий рост площади
-        if self.area_z > 0 and self.area_z * self.ar_thr < area:
-            self.flash = True
-            self.cnt    = 1.0
-        
-        if self.flash:
-            if self.cnt > self.cthr:
-                self.cnt = self.cnt * (1.0 - self.alpha)
-                print self.cnt
-            else:
-                self.flash = False
+        # считаем плотность "шумовых" областей движения.
+        pos = cv2.compare(neg, 0, cv2.CMP_EQ)
+        pos = cv2.bitwise_and(pos, 1)
+        # Единицы там, где может быть "шумовая" составляющая
+        ns     = cv2.bitwise_and(neg_msk, pos)
+        nsden  = np.sum(ns).astype('float')/np.sum(pos)
 
-        # Запомнили площадь и маску для сравнения на следующем шаге
-        self.noise_msk = n
-        self.area_z    = area;
+        #Вспышка - резкий рост плотности
+        flash = self.flash.run(nsden) or self.ifrm.run(nsden)
 
-        return n, self.flash, d
+        #Обновление служебной информации
+        print "Dencity change:", nsden/self.nsden_z
+        self.nsden_z    = nsden
+
+        return neg, flash, d
 
 
 class MotionSensor(BgEstimator):

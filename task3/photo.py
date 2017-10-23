@@ -8,6 +8,7 @@ import numpy as np
 #We don't have drawMatches in OpenCV 2.4, so we should use this:
 #https://stackoverflow.com/questions/20259025/module-object-has-no-attribute-drawmatches-opencv-python/26227854#26227854
 #if we need to draw them
+#https://www.learnopencv.com/image-alignment-ecc-in-opencv-c-python/
 #=======================================================================================================================
 """**************************************************************************
     Prokudin Gorsky photo assembler
@@ -131,18 +132,15 @@ def get_matched_points(matcher, kp1, dsc1, pt1, kp2, dsc2, pt2, N = 25, Q = 0.5)
 
 #=====================================================================
 def get_matched_img(kp1, x1, y1, kp2, img2):
+    
+    s = np.array([x1,y1])
+    
+    M, mask = cv2.findHomography(np.array(kp2)+s, np.array(kp1)+s, cv2.RANSAC, 5.0)
 
-    # Рассчитываем сдвиг и поворот
-    c1, c2, v1, v2, s, a = get_shift_and_angle(kp1, kp2)
+    ret = cv2.warpPerspective(img2, M, img2.shape)
 
-    print s,a
-
-    # Двигаем
-    M    = np.float32([[1, 0, s[0]], [0, 1, s[1]]])
-    ret = cv2.warpAffine(img2, M, img2.shape)
-
-    # Поворачиваем
-    M    = cv2.getRotationMatrix2D((c1[0] + x1, c1[1] + y1), a / np.pi * 180.0, 1.0)
+    # Костыль, иначе ругается merge, а времени на устранение недостатков нет
+    M    = np.float32([[1, 0, 0], [0, 1, 0]])
     ret = cv2.warpAffine(ret, M, ret.shape)
 
     return ret
@@ -178,7 +176,7 @@ def get_msk(i, j, M, img):
     return msk
 
 #=====================================================================
-def get_aligned_images(img_r, img_g, img_b, N=5, Q = 0.5, M=5):
+def get_aligned_images(img_r, img_g, img_b, N=5, Q = 0.7, M=5):
     # Не люблю патентованные алгоритмы, использую ORB
     orb = cv2.ORB(scaleFactor = 1.5, edgeThreshold=31, patchSize=31)
 
@@ -193,7 +191,7 @@ def get_aligned_images(img_r, img_g, img_b, N=5, Q = 0.5, M=5):
     search_params = dict(checks = 50)
 
     flann = cv2.FlannBasedMatcher(index_params, search_params)
-    
+
     # Анализируем картинки, формируем выборки для преобразования img_r, img_b
     c_gr = []
     c_r  = []
@@ -208,13 +206,13 @@ def get_aligned_images(img_r, img_g, img_b, N=5, Q = 0.5, M=5):
             kp_g, dsc_g = orb.detectAndCompute(img_g, get_msk(i, j, M, img_g))
             kp_b, dsc_b = orb.detectAndCompute(img_b, get_msk(i, j, M, img_b))
 
+            print 'Shapes kp:', np.array(c_gr).shape, np.array(c_r).shape, np.array(c_gb).shape, np.array(c_b).shape
+
             if len(kp_r) == 0 or len(kp_g) == 0 or len(kp_b) == 0:
                 continue
 
             c_gr, c_r = get_matched_points(flann, kp_g, dsc_g, c_gr, kp_r, dsc_r, c_r, N, Q)
             c_gb, c_b = get_matched_points(flann, kp_g, dsc_g, c_gb, kp_b, dsc_b, c_b, N, Q)
-
-            print 'Shapes kp:', np.array(c_gr).shape, np.array(c_r).shape, np.array(c_gb).shape, np.array(c_b).shape
 
     # Расширяем картинки для последующей обработки
     new_r,  x,  y = img_prepare(img_r)

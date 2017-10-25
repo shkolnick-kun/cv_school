@@ -178,7 +178,9 @@ def get_aligned_images(img_r, img_g, img_b, N=5, Q = 0.7, M=5):
     new_r = get_matched_img(c_gr, xg, yg, c_r, new_r)
     new_b = get_matched_img(c_gb, xg, yg, c_b, new_b)
 
-    return new_r, new_g, new_b
+    h,w = img_g.shape
+
+    return new_r[yg:yg+h, xg:xg+w], new_g[yg:yg+h, xg:xg+w], new_b[yg:yg+h, xg:xg+w]
 
 #=====================================================================
 """
@@ -240,9 +242,39 @@ def split_triple_image(img):
     изображений.
     """
     h,w = img.shape
-    top_shift = 30
-    img2 = img[top_shift:h-1,:] #отрежем сверху 30 пикселей
-    
+
+    # Ищем границы кадра
+    top_pos = 0
+    bot_pos = h-1
+    start = True
+    stval = img[0, w/2]
+    for i in range(0, h/10):
+        if start:
+            if img[i, w/2] < stval/10:
+                start = False
+                stval = img[i, w/2]
+        else:
+            if img[i, w/2] > stval*5:
+                top_pos = i
+                print "Found the edge at:", i
+                break
+
+    start = True
+    stval = img[bot_pos, w/2]
+    for i in range(1, h/10):
+        if start:
+            if img[h-i, w/2] < stval/10:
+                start = False
+                stval = img[h-i, w/2]
+        else:
+            if img[h-i, w/2] > stval*5:
+                bot_pos = h-i
+                print "Found the edge at:", h-i
+                break
+
+    # Отрезаем лишнее
+    img2 = img[top_pos:bot_pos,:]
+
     h,w = img2.shape
     h_part = int(h / 3)
     

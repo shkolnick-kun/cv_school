@@ -64,51 +64,6 @@ def get_matches(matcher, dsc1, dsc2, N = 5, Q = 0.5):
     return good
 
 #=====================================================================
-def get_ctr_and_vecs(pt):
-
-    pt = np.array(pt)
-
-    # Центр
-    c = np.average(pt, axis=0)
-
-    # Радиус-векторы
-    v = pt - c
-
-    # Модуль вектора
-    m = np.linalg.norm(v, axis=1)
-
-    # Направляющие косинусы
-    cs = v
-    for i in range(0, m.shape[0]):
-        cs[i,:] = v[i,:]/m[i]
-
-    return c, v, cs
-
-#=====================================================================
-def get_shift_and_angle(pt1, pt2):
-    # Получаем центры, радиус-векторы, направления
-    c1, v1, cs1 = get_ctr_and_vecs(pt1)
-    c2, v2, cs2 = get_ctr_and_vecs(pt2)
-    
-    # Считаем угол поворота    
-    n = v1.shape[0]
-    al = []
-    for i in range(0, n):
-        d1 = cs1[i,:]
-        d2 = cs2[i,:]
-        
-        if np.linalg.norm(d1 - d2) <= 0.0000000000001:
-            a = 0
-        else:
-            a = np.arccos(np.dot(d1, d2))
-
-        al.append(a)
-
-    angle = np.median(np.array(al))
-
-    return c1, c2, v1, v2, c1 - c2, angle
-
-#=====================================================================
 def get_matched_points(matcher, kp1, dsc1, pt1, kp2, dsc2, pt2, N = 25, Q = 0.5):
     
     # Получаем совпадающие фичи

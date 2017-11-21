@@ -84,7 +84,6 @@ def normalize_image(image):
     mean, std = image.mean(), image.std()
     return ((image - mean) / std)
 
-
 #==============================================================================
 # Препроцессинг изображений с лицами
 # 
@@ -514,8 +513,7 @@ def train_classifier(classifier_type, X, y, w, indices):
     error = classifier.train(X, y, w, indices)
     return error, classifier
 
-#==============================================================================
-def learn_best_classifier(classifier_type, X, y, w, all_features, indices):
+def learn_best_classifier(classifier_type, X, y, w, indices):
     '''
     Функция находит лучший слабый классификатор
     
@@ -525,7 +523,6 @@ def learn_best_classifier(classifier_type, X, y, w, all_features, indices):
         Каждый X[i] отсортирован по возрастанию
         y -- одномерный numpy массив с классом объекта (0|1). Порядок y соответствует порядку примеров в датасете
         w -- одномерный numpy массив весов для каждого примера. Порядок w соответствует порядку примеров в датасете
-        all_features -- список описаний признаков
         indices -- список одномерных numpy массивов. 
         indices[i, j] == изначальный индекс элемента, j-го в порядке сортировки для i-го признака
         
@@ -538,10 +535,12 @@ def learn_best_classifier(classifier_type, X, y, w, all_features, indices):
     # натренируем каждый классификатор по каждому признаку
     errors  = []
     classes = []
+    N = X.shape[1]
     
-    bar = progressbar.ProgressBar(maxval = len(all_features))
     
-    for i in bar(range(0, len(all_features))):
+    bar = progressbar.ProgressBar()
+    
+    for i in bar(range(0, N)):
 
         err, cls = train_classifier(classifier_type, X[i,:], y, w, indices[i,:])
         # Добавляем в списки
@@ -555,7 +554,6 @@ def learn_best_classifier(classifier_type, X, y, w, all_features, indices):
     i = np.array(errors).argmin()
     
     best_feature_ind = i
-    best_feature     = all_features[i]
     best_error       = errors[i]
     best_classifier  = classes[i]
     
@@ -563,16 +561,16 @@ def learn_best_classifier(classifier_type, X, y, w, all_features, indices):
     predictions = np.zeros(len(y))
     for j in range(0, len(y)):
         predictions[indices[best_feature_ind][j]] = best_classifier.classify(X[best_feature_ind][j])
-    return best_classifier, best_error, best_feature, predictions
+    return best_classifier, best_error, best_feature_ind, predictions
 
 #==============================================================================
 # Бустинговый классификатор
 
 class BoostingClassifier:
-    def __init__(self, classifiers, weights, features, threshold = None):
+    def __init__(self, classifiers, weights, ftr_idxs, threshold = None):
         self.classifiers = classifiers
         self.weights = weights
-        self.features = features
+        self.ftr_idxs = ftr_idxs
         self.threshold = sum(weights) / 2 if threshold is None else threshold
     
     def classify(self, X, ret_qa = False):
@@ -584,8 +582,8 @@ class BoostingClassifier:
         1, если ансамбль выдает значение больше threshold и 0 если меньше
         '''
         res = 0.0
-        for classifier, weight, feature in zip(self.classifiers, self.weights, self.features):
-            res += weight * classifier.classify(feature.compute_value(X))
+        for classifier, weight, ftr_idx in zip(self.classifiers, self.weights, self.ftr_idxs):
+            res += weight * classifier.classify(X[ftr_idx])
             
         ret_val = int(res > self.threshold)
             
@@ -615,28 +613,28 @@ def learn_face_detector(X, y, rounds = 200, eps = 1e-15):
     print('Done!\nSort X[i]...')
     # Предсортируем каждый признак, но сохраним соответствие между индексами
     # в массиве indices для каждого прзинака
-    bar = progressbar.ProgressBar(maxval = len(X_t))
+    bar = progressbar.ProgressBar()
     for index in bar(range(0, len(X_t))):
         indices[index] = X_t[index].argsort()
         X_t[index].sort()
     print('Done!\nInitiate learning procedure...')
     
     # найдем количество положительных примеров в выборке
-    n_positive = np.sum((y > 0).astype('int'))
+    n_positive = np.sum(y.astype('int'))
     # найдем количество отрицательных примеров в выборке
     n_negative = len(y) - n_positive
     # инициализируем веса
-    w = (1.0 / float(n_positive)) * (y == 1).astype('float') + (1.0 / float(n_negative)) * (y == 0).astype('float')
+    w = (1.0 / float(n_positive)) * y.astype('float') + (1.0 / float(n_negative)) * (y == 0).astype('float')
     print('Done!\nWill train the classifier...')
     classifiers = []
-    features = []
+    ftr_idxs = []
     alpha = []
     for round in range(0, rounds):
         print("Раунд {}".format(round))
         # нормируем веса так, чтобы сумма была равна 1
         w /= np.sum(w)
         # найдём лучший слабый классификатор
-        weak_classifier, error, feature, weak_classifier_predictions = learn_best_classifier(DecisionStump, X_t, y, w, all_features, indices)
+        weak_classifier, error, ftr_idx, weak_classifier_predictions = learn_best_classifier(DecisionStump, X_t, y, w, indices)
         print("Взвешенная ошибка текущего слабого классификатора: {}".format(error))
         # если ошибка уже почти нулевая, остановимся
         if error < eps:
@@ -651,29 +649,41 @@ def learn_face_detector(X, y, rounds = 200, eps = 1e-15):
         w *= (e + beta*ne)#np.power(beta, 1.0 - e)
         # добавим к ансамблю новый классификатор с его весом и признаком
         classifiers.append(weak_classifier)
-        features.append(feature)
-        alpha.append(math.log(1 / beta))
+        ftr_idxs.append(ftr_idx)
+        alpha.append(math.log(1.0 / beta))
         
         # посчитаем промежуточную точность
-        strong_classifier = BoostingClassifier(classifiers, alpha, features)
-        pos_predictions = [strong_classifier.classify(im) for im in integral_positives]
-        neg_predictions = [strong_classifier.classify(im) for im in integral_negatives]
-        correct_positives = float(sum(pos_predictions)) / float(len(pos_predictions))
-        correct_negatives = 1.0 - float(sum(neg_predictions)) / float(len(neg_predictions))
+        strong_classifier = BoostingClassifier(classifiers, alpha, ftr_idxs)
+        predictions = np.array([strong_classifier.classify(X[i]) for i in range(0, len(X))])
+        pos_predictions = np.sum((predictions * y).astype('float'))
+        neg_predictions = np.sum((predictions * (1 - y)).astype('float'))
+        correct_positives = pos_predictions / n_positive
+        correct_negatives = 1.0 - neg_predictions / n_negative
         print("Корректно классифицированные лица {}".format(correct_positives))
         print("Корректно классифицированные не-лица {}".format(correct_negatives))
     print('Done!')
-    return BoostingClassifier(classifiers, alpha, features)
+    return BoostingClassifier(classifiers, alpha, ftr_idxs)
+
+#==============================================================================
+def optimize_face_detector(cls, features):
+    opt_ftrs = [features[i] for i in cls.ftr_idxs]
+    cls.ftr_idxs = list(range(0,len(opt_ftrs)))
+    return opt_ftrs
 
 #==============================================================================
 strong_classifier = learn_face_detector(X_train, y_train, rounds = 100)
+str_cls_ftrs = optimize_face_detector(strong_classifier, all_features)
 
 #==============================================================================
 # Посчитаем точность
+def detect_faces_img(cls, features, img, ret_qa = False):
+    return cls.classify(compute_features_for_image(IntegralImage(img), features), ret_qa)
+
+def detect_faces_list(cls, features, img_list, ret_qa = False):
+    return [detect_faces_img(cls, features, img, ret_qa) for img in img_list]
+
 negatives_prepared_new = prepare_negatives(negatives, 10000, image_canonical_size)
-
-pred_neg_new = [strong_classifier.classify(IntegralImage(im)) for im in negatives_prepared_new]
-
+pred_neg_new = detect_faces_list(strong_classifier, str_cls_ftrs, negatives_prepared_new)
 false_positive_rate = sum(pred_neg_new) / len(pred_neg_new)
 print("Процент ложных обнаружений: {}".format(false_positive_rate * 100))
 
@@ -681,8 +691,7 @@ print("Процент ложных обнаружений: {}".format(false_posi
 test = get_all_images('data/test', 'test_img.npy')
 
 test_prepared = prepare_positives(test, image_canonical_size)
-
-test_positives_result = [strong_classifier.classify(IntegralImage(im)) for im in test_prepared]
+test_positives_result = detect_faces_list(strong_classifier, str_cls_ftrs, test_prepared)
 detection_rate = sum(test_positives_result) / len(test_positives_result)
 print("Процент корректных обнаружений: {}".format(detection_rate * 100))
 
@@ -692,10 +701,10 @@ pivot_thr = 0.5*sum(strong_classifier.weights)
 
 thr     = []
 fls_pos = []
-rate    = 0.125
+rate    = 0.5
 N       = 10
 
-bar = progressbar.ProgressBar(maxval =  N)
+bar = progressbar.ProgressBar()
 for i in bar(range(0, N + 1)):
     
     # Не хочется делать полный брутфорс
@@ -703,11 +712,11 @@ for i in bar(range(0, N + 1)):
     
     strong_classifier.threshold = cur_thr
     
-    test_positives_result = [strong_classifier.classify(IntegralImage(im)) for im in test_prepared]
+    test_positives_result = detect_faces_list(strong_classifier, str_cls_ftrs, test_prepared)
     detection_rate = sum(test_positives_result) / len(test_positives_result)
       
     if detection_rate > 0.9:
-        pred_neg_new = [strong_classifier.classify(IntegralImage(im)) for im in negatives_prepared_new]
+        pred_neg_new = detect_faces_list(strong_classifier, str_cls_ftrs, negatives_prepared_new)
         false_positive_rate = sum(pred_neg_new) / len(pred_neg_new)
         fls_pos.append(false_positive_rate)
         thr.append(cur_thr)
@@ -744,7 +753,7 @@ def detect_faces(image, classifier):
                     # здесь необходимо нормализовать изображение и применить классификатор
                     # если классификатор детектирует лицо, нужно добавить (x, y, xc, yc) к списку result
                     crop_resized = resize(crop, (image_canonical_size, image_canonical_size), mode='constant').astype(np.float32)
-                    is_face, face_qa = classifier.classify(IntegralImage(crop_resized), ret_qa = True)
+                    is_face, face_qa = detect_faces_img(classifier, str_cls_ftrs, crop_resized, ret_qa = True)# classifier.classify(compute_features_for_image(IntegralImage(crop_resized), str_cls_ftrs), ret_qa = True)
                     
                     if is_face:
                         results.append((x, y, xc, yc, face_qa))
@@ -765,8 +774,6 @@ im = images_to_scan[0]
 fig,ax = plt.subplots(1)
 fig.set_size_inches(20,20)
 ax.imshow(im, cmap='gray')
-
-
 
 for x, y, xc, yc, qa in result:
     ecl = cl.hsv_to_rgb(np.array([(qa-1)*2, 1.0, 1.0]))

@@ -550,8 +550,8 @@ class ViolaJonesСlassifier(object):
             bar = progressbar.ProgressBar()
             for x in bar(range(0, w, step)):
                 for y in range(0, h, step):
-                    xc = x + int(h * w_size)
-                    yc = y + int(w * w_size) #2/3 - пропорции лица по ширине/высоте
+                    xc = x + int(w * w_size)
+                    yc = y + int(h * w_size) #2/3 - пропорции лица по ширине/высоте
                     if xc < w and yc < h:
                         crop = norm_image[x:xc,y:yc]
                         # здесь необходимо нормализовать изображение и применить классификатор

@@ -23,8 +23,8 @@ SOFTWARE.
 """
 
 #==============================================================================
-import abc
-import math
+import pickle
+
 import numpy as np
 
 import os
@@ -33,16 +33,20 @@ from os import walk
 
 import progressbar
 
+from skimage import io
+
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from matplotlib import colors as cl
 
-
-from skimage import io
-from skimage.transform import resize
+import sys
+sys.path.append(os.getcwd())
+from libvj import *
 
 import random
 from random import randint
+
+
 
 #==============================================================================
 def _get_all_images(starting_dir):
@@ -67,24 +71,6 @@ def get_all_images(starting_dir, img_file):
         return ret
 
 #==============================================================================
-print('Loading images...')
-positives = get_all_images('data/positives', 'data/pos_img.npy')
-n_positives = len(positives)
-negatives = get_all_images('data/negatives', 'data/neg_img.npy')
-print('Done!')
-
-
-#==============================================================================
-# Зафиксируем размер окна, на котором будет работать классификатор
-image_canonical_size = 24
-
-#==============================================================================
-# Вычтем из изображения среднее и поделим на стандартное отклонение
-def normalize_image(image):
-    mean, std = image.mean(), image.std()
-    return ((image - mean) / std)
-
-#==============================================================================
 # Препроцессинг изображений с лицами
 # 
 # * Нормируем яркость, чтобы не учитывать освещенность
@@ -95,16 +81,6 @@ def prepare_positives(images, result_l):
     resized_images = [resize(im, (result_l, result_l), mode='constant') for im in norm_images]
     return resized_images
 
-#==============================================================================
-pos_prep_fl = 'data/pos_prep.npy'
-
-print('Prepare positive images...')
-if os.path.isfile(pos_prep_fl):
-    positives_prepared = np.load(pos_prep_fl)
-else:
-    positives_prepared = prepare_positives(positives, image_canonical_size)
-    np.save(pos_prep_fl, positives_prepared)
-print('Done!')
 
 #==============================================================================
 # Препроцессинг изображений без лиц
@@ -127,6 +103,30 @@ def prepare_negatives(images, sample_size, result_l):
         crop = resize(crop, (result_l, result_l), mode='constant')
         crops.append(crop)
     return crops
+
+#==============================================================================
+print('Loading images...')
+positives = get_all_images('data/positives', 'data/pos_img.npy')
+n_positives = len(positives)
+negatives = get_all_images('data/negatives', 'data/neg_img.npy')
+print('Done!')
+
+#==============================================================================
+# Зафиксируем размер окна, на котором будет работать классификатор
+image_canonical_size = 24
+
+
+#==============================================================================
+pos_prep_fl = 'data/pos_prep.npy'
+
+print('Prepare positive images...')
+if os.path.isfile(pos_prep_fl):
+    positives_prepared = np.load(pos_prep_fl)
+else:
+    positives_prepared = prepare_positives(positives, image_canonical_size)
+    np.save(pos_prep_fl, positives_prepared)
+print('Done!')
+
 
 #==============================================================================
 # Возьмем столько же негативных изображений, сколько позитивных
@@ -154,53 +154,6 @@ assert(all([image_has_correct_format(im) for im in positives_prepared]))
 assert(len(negatives_prepared) == n_negatives)
 assert(all([image_has_correct_format(im) for im in negatives_prepared]))
 
-#==============================================================================
-# Интегральное изображение
-
-class IntegralImage:
-    def __init__(self, image):
-        # hint: воспользуйтесь numpy.cumsum два раза, чтобы получить двумерную кумулятивную сумму
-        h,w = image.shape
-        
-        ii = np.zeros((h + 1, w + 1), image.dtype)
-        
-        ii[1:, 1:] = np.cumsum(np.cumsum(image,0),1)
-        
-        self.integral_image = ii
-    
-    def sum(self, x1, y1, x2, y2):
-        '''
-        Сумма подмассива
-        
-        На входе:
-            x1, y1 -- координаты левого нижнего угла прямоугольника запроса
-            x2, y2 -- координаты верхнего правого угла прямоугольника запроса
-            
-        На выходе:
-            Сумма подмассива [x1..x2, y1..y2]
-        '''
-        assert(x1 <= x2)
-        assert(y1 <= y2)
-        
-        x2 = x2 + 1
-        y2 = y2 + 1
-        
-        b11 = self.integral_image[x1, y1]
-        b12 = self.integral_image[x2, y1]
-        b21 = self.integral_image[x1, y2]
-        b22 = self.integral_image[x2, y2]
-        
-        return b22 - b12 - b21 + b11
-
-#==============================================================================
-def get_integral_imgs(imgs, img_file):
-    
-    if os.path.isfile(img_file):
-        return list(np.load(img_file))
-    else:
-        ret = [IntegralImage(im) for im in imgs]
-        np.save(img_file, np.array(ret))
-        return ret
 
 #==============================================================================
 print('Preparing integral images...')
@@ -208,149 +161,6 @@ integral_positives = get_integral_imgs(positives_prepared, 'data/pos_int.npy') #
 integral_negatives = get_integral_imgs(negatives_prepared, 'data/neg_int.npy') #[IntegralImage(im) for im in negatives_prepared]
 print('Done!')
 
-
-#==============================================================================
-# Признаки Хаара
-
-# Общий интерфейс для всех классов признаков
-
-class HaarFeature(object):
-    __metaclass__ = abc.ABCMeta
-    @abc.abstractmethod
-    def compute_value(self, integral_image):
-        '''
-        Функция, вычисляющая и возвращающая значение признака
-        
-        На входе:
-            integral_image -- IntegralImage
-            
-        На выходе:
-            Значение признака
-        '''
-        pass
-    
-    def __repr__(self):
-        return "Feature {}, {}, {}, {}".format(self.x_s, self.y_s, self.x_e, self.y_e)
-
-
-#==============================================================================
-class HaarFeatureVerticalTwoSegments(HaarFeature):
-    def __init__(self, x, y, w, h):
-        assert(h % 2 == 0)
-        assert(x >= 0)
-        assert(y >= 0)
-        assert(w >= 2)
-        assert(h >= 2)
-        
-        self.x_s = x
-        self.x_e = x + w - 1
-        
-        self.y_s   = y
-        self.y_m   = y + h // 2
-        self.y_m_1 = y + h // 2 - 1
-        self.y_e   = y + h - 1
-        
-    def compute_value(self, integral_image):
-        s1 = integral_image.sum(self.x_s, self.y_s, self.x_e, self.y_m_1)
-        s2 = integral_image.sum(self.x_s, self.y_m, self.x_e, self.y_e)
-        return s1 - s2
-
-#==============================================================================
-class HaarFeatureVerticalThreeSegments(HaarFeature):
-    
-    def __init__(self, x, y, w, h):
-        assert(h % 3 == 0)
-        assert(x >= 0)
-        assert(y >= 0)
-        assert(w >= 2)
-        assert(h >= 3)
-        
-        self.x_s  = x
-        self.x_e  = x + w - 1
-    
-        self.y_s  = y
-        self.y_m1 = y + h // 3
-        self.y_m2 = y + 2 * h // 3 - 1
-        self.y_e  = y + h - 1
-        
-    def compute_value(self, integral_image):
-        s1 = integral_image.sum(self.x_s, self.y_s,  self.x_e, self.y_e)
-        s2 = integral_image.sum(self.x_s, self.y_m1, self.x_e, self.y_m2)
-        return s1 - 2.0 * s2
-
-#==============================================================================
-class HaarFeatureHorizontalTwoSegments(HaarFeature):
-    
-    def __init__(self, x, y, w, h):
-        assert(h % 2 == 0)
-        assert(x >= 0)
-        assert(y >= 0)
-        assert(w >= 2)
-        assert(h >= 2)
-        
-        self.x_s   = x
-        self.x_m   = x + w // 2
-        self.x_m_1 = x + w // 2 - 1
-        self.x_e   = x + w - 1
-        
-        self.y_s   = y
-        self.y_e   = y + h - 1
-        
-    def compute_value(self, integral_image):
-        s1 = integral_image.sum(self.x_m, self.y_s, self.x_e,   self.y_e)
-        s2 = integral_image.sum(self.x_s, self.y_s, self.x_m_1, self.y_e)
-        return s1 - s2
-
-#==============================================================================
-class HaarFeatureHorizontalThreeSegments(HaarFeature):
-        
-    def __init__(self, x, y, w, h):
-        assert(w % 3 == 0)
-        assert(x >= 0)
-        assert(y >= 0)
-        assert(h >= 2)
-        assert(w >= 3)
-        
-        self.y_s  = y
-        self.y_e  = y + h - 1
-    
-        self.x_s  = x
-        self.x_m1 = x + w // 3
-        self.x_m2 = x + 2 * w // 3 - 1
-        self.x_e  = x + w - 1
-        
-    def compute_value(self, integral_image):
-        s1 = integral_image.sum(self.x_s,  self.y_s,  self.x_e,  self.y_e)
-        s2 = integral_image.sum(self.x_m1, self.y_s,  self.x_m2, self.y_e)
-        return s1 - 2*s2
-
-#==============================================================================
-class HaarFeatureFourSegments(HaarFeature):
-    def __init__(self, x, y, w, h):
-        assert(h % 2 == 0)
-        assert(w % 2 == 0)
-        assert(x >= 0)
-        assert(y >= 0)
-        assert(w >= 2)
-        assert(h >= 2)
-        
-        self.x_s   = x
-        self.x_m   = x + w // 2
-        self.x_m_1 = x + w // 2 - 1
-        self.x_e   = x + w - 1
-        
-        self.y_s   = y
-        self.y_m   = y + h // 2
-        self.y_m_1 = y + h // 2 - 1
-        self.y_e   = y + h - 1
-        
-    def compute_value(self, integral_image):
-        
-        s1 = integral_image.sum(self.x_s, self.y_s, self.x_e,   self.y_e  )
-        s2 = integral_image.sum(self.x_s, self.y_m, self.x_m_1, self.y_e  )
-        s3 = integral_image.sum(self.x_m, self.y_s, self.x_e,   self.y_m_1)
-        
-        return s1 - 2*s2 - 2*s3
 
 #==============================================================================
 # Сохраним все возможные признаки
@@ -377,16 +187,7 @@ for x in range(0, image_canonical_size, x_stride):
                         all_features.append(feature)
                     except:
                         continue
-print("Всего признаков: {}".format(len(all_features)))         
-
-#==============================================================================
-# Вычислим все признаки на всех изображениях
-
-def compute_features_for_image(integral_image, features):
-    result = np.zeros(len(features))
-    for ind, feature in enumerate(features):
-        result[ind] = feature.compute_value(integral_image)
-    return result
+print("Всего признаков: {}".format(len(all_features)))  
 
 #==============================================================================
 def _compute_features(integral_images, features):
@@ -426,348 +227,52 @@ y_train = np.concatenate((y_positive, y_negative))
 print('Done!')
 
 #==============================================================================
-# Базовый классификатор
 
-class DecisionStump:
-    def __init__(self, threshold = 0, polarity = 1):
-        self.threshold = threshold
-        self.polarity = polarity
-        
-    def train(self, X, y, w, indices):
-        '''
-            Функция осуществляет обучение слабого классификатора
-            
-            На входе:
-                X -- одномерный отсортированный numpy массив со значениями признака
-                y -- одномерный numpy массив со значением класса для примера (0|1)
-                Порядок y -- до сортировки X
-                w -- одномерный numpy массив со значением весов признаков
-                Порядок w -- до сортировки X
-                indices -- одномерный numpy массив, перестановка [несортированный X] -> [сортированный X]
-                Массив indices нужен для оптимизации,
-                чтобы не сортировать X каждый раз, мы предсортируем значения признаков
-                для всех примеров. При этом мы сохраняем отображение между сортированными
-                и изначальными индексами, чтобы знать соответствие между x, y и w
+print('Will get face detector!')
 
-                indices[i] == изначальный индекс элемента, i-го в порядке сортировки
-            
-            На выходе:
-            
-            численное значение ошибки обученного классификатора
-        '''
-        w = np.take(w, indices)
-        y = np.take(y, indices)
-            
-        
-        # Какой ужас!
-        # Так и хочется переписать на Си!
-        def _learn(X, y, w):
-            
-            s1 = y*w
-            s1[1:] = s1[:-1]
-            s1[0] = 0
-            s1 = np.cumsum(s1)
+fd_file = 'data/face_detector.pickle'
 
-            y = (y == 0).astype(y.dtype)
-            s2 = y*w
-            s2 = np.flipud(s2)
-            s2 = np.cumsum(s2)
-            s2 = np.flipud(s2)
-            
-            error = s1 + s2 
-            
-            n = np.argmin(error)
-            
-            return X[n], error[n]
-        # Ужас!
-
-        x_pos, e_pos = _learn(X, y, w)
-        
-        X = np.flipud(X)
-        y = np.flipud(y)
-        w = np.flipud(w)
-        
-        x_neg, e_neg = _learn(X, y, w)
-
-        if e_pos <= e_neg:
-            self.threshold = x_pos
-            self.polarity  = 1
-            error = e_pos
-        else:
-            self.threshold = x_neg
-            self.polarity  = -1
-            error = e_neg
-            
-        return error
-                
-    def classify(self, x):
-        return np.array(self.polarity * x >= self.polarity * self.threshold).astype('int')
-        #return 1 if self.polarity * x >= self.polarity * self.threshold else 0
+if os.path.isfile(fd_file):
     
-    def __repr__(self):
-        return "Threshold: {}, polarity: {}".format(self.threshold, self.polarity)
-
-#==============================================================================
-def train_classifier(classifier_type, X, y, w, indices):
-    classifier = classifier_type()
-    error = classifier.train(X, y, w, indices)
-    return error, classifier
-
-def learn_best_classifier(classifier_type, X, y, w, indices):
-    '''
-    Функция находит лучший слабый классификатор
+    print('Loading...')        
+    vj_cls = pickle.load(open(fd_file,'rb'))
+else:
     
-    На входе:
-        classifier_type -- класс классификатора (DecisionStump в нашем случае)
-        X -- двумерный numpy массив, где X[i, j] -- значение признака i для примера j
-        Каждый X[i] отсортирован по возрастанию
-        y -- одномерный numpy массив с классом объекта (0|1). Порядок y соответствует порядку примеров в датасете
-        w -- одномерный numpy массив весов для каждого примера. Порядок w соответствует порядку примеров в датасете
-        indices -- список одномерных numpy массивов. 
-        indices[i, j] == изначальный индекс элемента, j-го в порядке сортировки для i-го признака
-        
-    На выходе:
-        best_classifier -- лучший слабый классификатор
-        best_error -- его ошибка
-        best_feature -- признак, на котором он был обучен (одна из HaarFeatures)
-        predictions -- предсказания классификатора (в порядке до сортировки)
-    '''    
-    # натренируем каждый классификатор по каждому признаку
-    errors  = []
-    classes = []
-    N = X.shape[1]
+    vj_cls = ViolaJonesСlassifier(rounds = 100)
     
-    
-    bar = progressbar.ProgressBar()
-    
-    for i in bar(range(0, N)):
+    print('Will train face detector...')
+    vj_cls.fit(X_train, y_train)
+    print('Will optimize face detector...')
+    vj_cls.add_features(all_features)
 
-        err, cls = train_classifier(classifier_type, X[i,:], y, w, indices[i,:])
-        # Добавляем в списки
-        errors.append(err)
-        classes.append(cls)
-    
-    # выберем наилучший и сохраним лучший классификатор, ошибку, признак и индекс признака в 
-    # best_classifier, best_error, best_feature, best_feature_ind
-    # Как то так:
-    # https://stackoverflow.com/questions/2474015/getting-the-index-of-the-returned-max-or-min-item-using-max-min-on-a-list
-    i = np.array(errors).argmin()
-    
-    best_feature_ind = i
-    best_error       = errors[i]
-    best_classifier  = classes[i]
-    
-    # вернем также предсказания лучшего классификатора
-    predictions = np.zeros(len(y))
-    for j in range(0, len(y)):
-        predictions[indices[best_feature_ind][j]] = best_classifier.classify(X[best_feature_ind][j])
-    return best_classifier, best_error, best_feature_ind, predictions
+    print('Will check for false positive...')
+    negatives_prepared_new = prepare_negatives(negatives, 10000, image_canonical_size)
+    pred_neg_new = vj_cls.classify_wlist(negatives_prepared_new)
+    false_positive_rate = sum(pred_neg_new) / len(pred_neg_new)
+    print("Процент ложных обнаружений: {}".format(false_positive_rate * 100))
 
-#==============================================================================
-# Бустинговый классификатор
-
-class BoostingClassifier:
-    def __init__(self, classifiers, weights, ftr_idxs, threshold = None):
-        self.classifiers = classifiers
-        self.weights = weights
-        self.ftr_idxs = ftr_idxs
-        self.threshold = sum(weights) / 2 if threshold is None else threshold
-    
-    def classify(self, X, ret_qa = False):
-        '''
-        На входе:
-        X -- одномерный numpy вектор признаков
-
-        На выходе:
-        1, если ансамбль выдает значение больше threshold и 0 если меньше
-        '''
-        res = 0.0
-        for classifier, weight, ftr_idx in zip(self.classifiers, self.weights, self.ftr_idxs):
-            res += weight * classifier.classify(X[ftr_idx])
-            
-        ret_val = int(res > self.threshold)
-            
-        if ret_qa:
-            return ret_val, res/self.threshold
-        else:
-            return ret_val
-
-#==============================================================================
-# Обучение методом бустинга
-
-def learn_face_detector(X, y, rounds = 200, eps = 1e-15):
-    '''
-    На входе:
-        X -- двумерный numpy массив, X[i,j] == значение признака j для примера i
-        y -- одномерный numpy массив с классом объекта (0|1)
-        rounds -- максимальное количество раундов обучения
-        eps -- критерий останова (алгоритм останавливается, если новый классификатор имеет ошибку меньше eps)
-
-    На выходе:
-        классификатор типа BoostingClassifier
-    '''
-    # Транспонируем матрицу пример-признак к матрицу признак-примеры
-    print('Transpose X...')
-    X_t = X.copy().T
-    indices = np.zeros(X_t.shape).astype(int)
-    print('Done!\nSort X[i]...')
-    # Предсортируем каждый признак, но сохраним соответствие между индексами
-    # в массиве indices для каждого прзинака
-    bar = progressbar.ProgressBar()
-    for index in bar(range(0, len(X_t))):
-        indices[index] = X_t[index].argsort()
-        X_t[index].sort()
-    print('Done!\nInitiate learning procedure...')
-    
-    # найдем количество положительных примеров в выборке
-    n_positive = np.sum(y.astype('int'))
-    # найдем количество отрицательных примеров в выборке
-    n_negative = len(y) - n_positive
-    # инициализируем веса
-    w = (1.0 / float(n_positive)) * y.astype('float') + (1.0 / float(n_negative)) * (y == 0).astype('float')
-    print('Done!\nWill train the classifier...')
-    classifiers = []
-    ftr_idxs = []
-    alpha = []
-    for round in range(0, rounds):
-        print("Раунд {}".format(round))
-        # нормируем веса так, чтобы сумма была равна 1
-        w /= np.sum(w)
-        # найдём лучший слабый классификатор
-        weak_classifier, error, ftr_idx, weak_classifier_predictions = learn_best_classifier(DecisionStump, X_t, y, w, indices)
-        print("Взвешенная ошибка текущего слабого классификатора: {}".format(error))
-        # если ошибка уже почти нулевая, остановимся
-        if error < eps:
-            break
-        
-        # найдем beta
-        beta = error / (1.0 - error)
-        # e[i] == 0 если классификация правильная и 1 наоборот
-        e  = (y != weak_classifier_predictions).astype('float')
-        ne = 1.0 - e
-        # каждый правильно классифицированный вес нужно домножить на beta 
-        w *= (e + beta*ne)#np.power(beta, 1.0 - e)
-        # добавим к ансамблю новый классификатор с его весом и признаком
-        classifiers.append(weak_classifier)
-        ftr_idxs.append(ftr_idx)
-        alpha.append(math.log(1.0 / beta))
-        
-        # посчитаем промежуточную точность
-        strong_classifier = BoostingClassifier(classifiers, alpha, ftr_idxs)
-        predictions = np.array([strong_classifier.classify(X[i]) for i in range(0, len(X))])
-        pos_predictions = np.sum((predictions * y).astype('float'))
-        neg_predictions = np.sum((predictions * (1 - y)).astype('float'))
-        correct_positives = pos_predictions / n_positive
-        correct_negatives = 1.0 - neg_predictions / n_negative
-        print("Корректно классифицированные лица {}".format(correct_positives))
-        print("Корректно классифицированные не-лица {}".format(correct_negatives))
-    print('Done!')
-    return BoostingClassifier(classifiers, alpha, ftr_idxs)
-
-#==============================================================================
-def optimize_face_detector(cls, features):
-    opt_ftrs = [features[i] for i in cls.ftr_idxs]
-    cls.ftr_idxs = list(range(0,len(opt_ftrs)))
-    return opt_ftrs
-
-#==============================================================================
-strong_classifier = learn_face_detector(X_train, y_train, rounds = 100)
-str_cls_ftrs = optimize_face_detector(strong_classifier, all_features)
-
-#==============================================================================
-# Посчитаем точность
-def detect_faces_img(cls, features, img, ret_qa = False):
-    return cls.classify(compute_features_for_image(IntegralImage(img), features), ret_qa)
-
-def detect_faces_list(cls, features, img_list, ret_qa = False):
-    return [detect_faces_img(cls, features, img, ret_qa) for img in img_list]
-
-negatives_prepared_new = prepare_negatives(negatives, 10000, image_canonical_size)
-pred_neg_new = detect_faces_list(strong_classifier, str_cls_ftrs, negatives_prepared_new)
-false_positive_rate = sum(pred_neg_new) / len(pred_neg_new)
-print("Процент ложных обнаружений: {}".format(false_positive_rate * 100))
-
-#==============================================================================
-test = get_all_images('data/test', 'test_img.npy')
-
-test_prepared = prepare_positives(test, image_canonical_size)
-test_positives_result = detect_faces_list(strong_classifier, str_cls_ftrs, test_prepared)
-detection_rate = sum(test_positives_result) / len(test_positives_result)
-print("Процент корректных обнаружений: {}".format(detection_rate * 100))
-
-#==============================================================================
-# Калибрация классификатора
-pivot_thr = 0.5*sum(strong_classifier.weights)
-
-thr     = []
-fls_pos = []
-rate    = 0.5
-N       = 10
-
-bar = progressbar.ProgressBar()
-for i in bar(range(0, N + 1)):
-    
-    # Не хочется делать полный брутфорс
-    cur_thr = pivot_thr * (1 + rate * (i / N - 0.5))
-    
-    strong_classifier.threshold = cur_thr
-    
-    test_positives_result = detect_faces_list(strong_classifier, str_cls_ftrs, test_prepared)
+    print('Will check for positive...')
+    test = get_all_images('data/test', 'test_img.npy')
+    test_prepared = prepare_positives(test, image_canonical_size)
+    test_positives_result = vj_cls.classify_wlist(test_prepared)
     detection_rate = sum(test_positives_result) / len(test_positives_result)
-      
-    if detection_rate > 0.9:
-        pred_neg_new = detect_faces_list(strong_classifier, str_cls_ftrs, negatives_prepared_new)
-        false_positive_rate = sum(pred_neg_new) / len(pred_neg_new)
-        fls_pos.append(false_positive_rate)
-        thr.append(cur_thr)
-        
-i = np.array(fls_pos).argmin()
-
-print("Процент ложных обнаружений: {}".format(fls_pos[i] * 100))
-
-# В конце установить подходящее значение порога
-strong_classifier.threshold = thr[i]
+    print("Процент корректных обнаружений: {}".format(detection_rate * 100))
+    
+    print('Will calibrate face detector...')
+    vj_cls.calibrate(test_prepared, negatives_prepared_new)    
+    
+    print('Will save the face detector...')
+    pickle.dump(vj_cls, open(fd_file,'wb'))
+    
+print('Done!')
 
 #==============================================================================
 # Воспользуемся полученным классификатором, чтобы найти лица на изображении
-
 images_to_scan = get_all_images('data/for_scanning', 'data/for_scan_img.npy')
-
 #==============================================================================
-# примерный скелет программы (наивная реализация)
+result = vj_cls.detect(images_to_scan[0], image_canonical_size)
 
-def detect_faces(image, classifier):
-    norm_image = normalize_image(image)
-    w, h = norm_image.shape
-    # лучше задавать не абсолютные размеры окна, а относительные (в процентах)
-    window_sizes = [0.15, 0.2, 0.25]
-    results = []
-    for w_size in window_sizes:
-        bar = progressbar.ProgressBar()
-        for x in bar(range(0, w, 5)):
-            for y in range(0, h, 5):
-                xc = x + int(h * w_size)
-                yc = y + int(w * (2/3) * w_size) #2/3 - пропорции лица по ширине/высоте
-                if xc < w and yc < h:
-                    crop = norm_image[x:xc,y:yc]
-                    # здесь необходимо нормализовать изображение и применить классификатор
-                    # если классификатор детектирует лицо, нужно добавить (x, y, xc, yc) к списку result
-                    crop_resized = resize(crop, (image_canonical_size, image_canonical_size), mode='constant').astype(np.float32)
-                    is_face, face_qa = detect_faces_img(classifier, str_cls_ftrs, crop_resized, ret_qa = True)# classifier.classify(compute_features_for_image(IntegralImage(crop_resized), str_cls_ftrs), ret_qa = True)
-                    
-                    if is_face:
-                        results.append((x, y, xc, yc, face_qa))
-    
-    return results
-
-result = detect_faces(images_to_scan[0], strong_classifier)
-
-
-
-print(thr[i])
-
-np.save('detected_quarter.npy', np.array(result))
-print(np.load('detected_quarter.npy'))
+np.save('detected_frames.npy', np.array(result))
 
 im = images_to_scan[0]
 
@@ -781,3 +286,4 @@ for x, y, xc, yc, qa in result:
     ax.add_patch(rect)
 
 plt.show()
+

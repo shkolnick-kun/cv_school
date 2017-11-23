@@ -39,7 +39,10 @@ from skimage.transform import resize
 # Вычтем из изображения среднее и поделим на стандартное отклонение
 def normalize_image(image):
     mean, std = image.mean(), image.std()
-    return ((image - mean) / std)
+    if std == 0:
+        return 0.0 * image
+    else:
+        return ((image - mean) / std)
 
 #==============================================================================
 # Интегральное изображение
@@ -355,13 +358,13 @@ class BoostingClassifier:
 #==============================================================================
 # Обучение методом бустинга
 class ViolaJonesСlassifier(object):
-    def __init__(self, rounds = 200, eps = 1e-15):
+    def __init__(self, img_sz = 24, rounds = 200, eps = 1e-15):
+        self.img_sz = img_sz
         self.rounds = rounds
         self.eps    = eps
         self.cls    = None #Классификатор
         self.ftrs   = None #Набор фичей
         
-
     def train_classifier(classifier_type, X, y, w, indices):
         classifier = classifier_type()
         error = classifier.train(X, y, w, indices)
@@ -538,32 +541,32 @@ class ViolaJonesСlassifier(object):
         # В конце установить подходящее значение порога
         self.cls.threshold = thr[i]
 
-    def detect_multi(self, image, img_sz, step = 1):
+    def detect_win(self, img, x, xc, y, yc):
+        img_sz = self.img_sz
+        crop = img[x:xc,y:yc]
+        crop = normalize_image(crop)
+        crop = resize(crop, (img_sz, img_sz), mode='constant').astype(np.float32)
+        return self.classify_win(crop, ret_qa = True)
 
-        norm_image = normalize_image(image)
-
-        w, h = norm_image.shape
+    def detect_multi(self, image, step = 1):
+        w, h = image.shape
         d = min(w, h)
-
         # лучше задавать не абсолютные размеры окна, а относительные (в процентах)
         window_sizes = [0.1, 0.2, 0.4, 0.8]
         results = []
         for w_size in window_sizes:
-            
             res_scaled = []
             bar = progressbar.ProgressBar()
+            # Изображение обходим с "грубым" шагом
             for x in bar(range(0, w, step)):
                 xc = x + int(d * w_size)
                 for y in range(0, h, step):
                     yc = y + int(d * w_size) # - пропорции лица по ширине/высоте
+                    # Обрабатывем только допустимые окна
                     if xc < w and yc < h:
-                        crop = norm_image[x:xc,y:yc]
-                        # здесь необходимо нормализовать изображение и применить классификатор
-                        # если классификатор детектирует лицо, нужно добавить (x, y, xc, yc) к списку result
-                        crop_resized = resize(crop, (img_sz, img_sz), mode='constant').astype(np.float32)
-                        is_face, face_qa = self.classify_win(crop_resized, ret_qa = True)
-                        #
+                        is_face, face_qa = self.detect_win(image, x, xc, y, yc)
                         if is_face:
+                            #Если нашли лицо - обходим прилегающую область с шагом в 1 пиксель
                             for sx in range(-step, step):
                                 xs = x + sx
                                 xe = x + sx + int(d * w_size)
@@ -571,10 +574,10 @@ class ViolaJonesСlassifier(object):
                                     ys = y + sy
                                     ye = y + sy+ int(d * w_size)
                                     if xs < w and ys < h and xe < w and ye < h and xs > 0 and ys > 0 and xe > 0 and ye > 0:
-                                        crop = norm_image[xs:xe, ys:ye]
-                                        crop_resized = resize(crop, (img_sz, img_sz), mode='constant').astype(np.float32)
-                                        is_face, face_qa = self.classify_win(crop_resized, ret_qa = True)
+                                        #Обрабатываем только валиные окна
+                                        is_face, face_qa = self.detect_win(image, xs, xe, ys, ye)
                                         if is_face:
+                                            #Формируем список найденных рамок
                                             res_scaled.append((xs, ys, xe, ye, face_qa))
                             
             results.append(res_scaled)

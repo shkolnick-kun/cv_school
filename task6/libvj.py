@@ -570,7 +570,7 @@ class ViolaJonesСlassifier(object):
                                 for sy in range(-step, step):
                                     ys = y + sy
                                     ye = y + sy+ int(d * w_size)
-                                    if xs < w and ys < h and xe < w and ye < h:
+                                    if xs < w and ys < h and xe < w and ye < h and xs > 0 and ys > 0 and xe > 0 and ye > 0:
                                         crop = norm_image[xs:xe, ys:ye]
                                         crop_resized = resize(crop, (img_sz, img_sz), mode='constant').astype(np.float32)
                                         is_face, face_qa = self.classify_win(crop_resized, ret_qa = True)

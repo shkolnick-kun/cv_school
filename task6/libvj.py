@@ -537,10 +537,14 @@ class ViolaJonesСlassifier(object):
 
         # В конце установить подходящее значение порога
         self.cls.threshold = thr[i]
-        
+            
     def detect_multi(self, image, img_sz, step = 1):
+
         norm_image = normalize_image(image)
+
         w, h = norm_image.shape
+        d = min(w, h)
+
         # лучше задавать не абсолютные размеры окна, а относительные (в процентах)
         window_sizes = [0.1, 0.2, 0.4, 0.8]
         results = []
@@ -550,8 +554,8 @@ class ViolaJonesСlassifier(object):
             bar = progressbar.ProgressBar()
             for x in bar(range(0, w, step)):
                 for y in range(0, h, step):
-                    xc = x + int(h * w_size)
-                    yc = y + int(h * 2/3 * w_size) # - пропорции лица по ширине/высоте
+                    xc = x + int(d * w_size)
+                    yc = y + int(d * w_size) # - пропорции лица по ширине/высоте
                     if xc < w and yc < h:
                         crop = norm_image[x:xc,y:yc]
                         # здесь необходимо нормализовать изображение и применить классификатор

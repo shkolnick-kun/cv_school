@@ -238,7 +238,7 @@ if os.path.isfile(fd_file):
     vj_cls = pickle.load(open(fd_file,'rb'))
 else:
     
-    vj_cls = ViolaJonesСlassifier(rounds = 100)
+    vj_cls = ViolaJonesСlassifier(image_canonical_size, rounds = 200)
     
     print('Will train face detector...')
     vj_cls.fit(X_train, y_train)
@@ -270,7 +270,8 @@ print('Done!')
 # Воспользуемся полученным классификатором, чтобы найти лица на изображении
 images_to_scan = get_all_images('data/for_scanning', 'data/for_scan_img.npy')
 #==============================================================================
-result = vj_cls.detect(images_to_scan[0], image_canonical_size)
+
+result = vj_cls.detect(images_to_scan[0], 8)
 
 np.save('detected_frames.npy', np.array(result))
 
@@ -286,4 +287,3 @@ for x, y, xc, yc, qa in result:
     ax.add_patch(rect)
 
 plt.show()
-

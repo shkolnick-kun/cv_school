@@ -584,10 +584,10 @@ class ViolaJonesСlassifier(object):
         #
         return results
     
-    def detect(self, image, img_sz, step = 1):
+    def detect(self, image, step = 1):
         
         ret = []
-        for res in self.detect_multi(image, img_sz, step):
+        for res in self.detect_multi(image, step):
             ret += res
         
         return ret

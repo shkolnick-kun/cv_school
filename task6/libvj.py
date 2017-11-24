@@ -567,7 +567,7 @@ class ViolaJonesСlassifier(object):
                         is_face, face_qa = self.detect_win(image, x, xc, y, yc)
                         if is_face:
                             #Если нашли лицо - обходим прилегающую область с шагом в 1 пиксель
-                            for sx in range(-step, step):
+                            for sx in range(-step // 2, step // 2):
                                 xs = x + sx
                                 xe = x + sx + int(d * w_size)
                                 for sy in range(-step, step):

@@ -153,8 +153,8 @@ def compute_dynamic_features(vec):
     m_shape = (5, 1536)
     mat = np.reshape(vec, m_shape)
     ret = np.zeros(m_shape, mat.dtype)
-    #Структура
-    ret[0,:] = mat[2,:]
+    #Структура не нужна
+    #ret[0,:] = mat[2,:]
     #Динамика
     ret[1,:] = 0.5*(          mat[3,:] -                    mat[1,:]          )
     ret[2,:] =                mat[3,:] - 2.0*mat[2,:] +     mat[1,:]
